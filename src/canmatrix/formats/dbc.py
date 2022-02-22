@@ -544,7 +544,7 @@ def load(f, **options):  # type: (typing.IO, **typing.Any) -> canmatrix.CanMatri
                 continue
             decoded = l.decode(dbc_import_encoding).strip()
             if decoded.startswith("BO_ "):
-                regexp = re.compile(r"^BO_ ([^\ ]+) ([^\ ]+) *: ([^\ ]+) ([^\ ]+)")
+                regexp = re.compile(r"^BO_ ([^\ ]+) ([^\ ]+) *: *([^\ ]+) ([^\ ]+)")
                 temp = regexp.match(decoded)
     #            db.frames.addFrame(Frame(temp.group(1), temp.group(2), temp.group(3), temp.group(4)))
                 frame = canmatrix.Frame(temp.group(2), arbitration_id=int(temp.group(1)),
@@ -552,11 +552,15 @@ def load(f, **options):  # type: (typing.IO, **typing.Any) -> canmatrix.CanMatri
                 db.frames.append(frame)
                 add_frame_by_id(frame)
             elif decoded.startswith("SG_ "):
+                original_line = l
+                if decoded.strip().endswith(r'"'):
+                    decoded += r" Vector__XXX"
+                    original_line += b" Vector__XXX"
                 pattern = r"^SG_ +(\w+) *: *(\d+)\|(\d+)@(\d+)([\+|\-]) *\(([0-9.+\-eE]+), *([0-9.+\-eE]+)\) *\[([0-9.+\-eE]+)\|([0-9.+\-eE]+)\] +\"(.*)\" +(.*)"
                 regexp = re.compile(pattern)
                 temp = regexp.match(decoded)
                 regexp_raw = re.compile(pattern.encode(dbc_import_encoding))
-                temp_raw = regexp_raw.match(l)
+                temp_raw = regexp_raw.match(original_line)
                 if temp:
                     receiver = [b.strip() for b in temp.group(11).split(',')]
 
@@ -588,7 +592,7 @@ def load(f, **options):  # type: (typing.IO, **typing.Any) -> canmatrix.CanMatri
                     regexp = re.compile(pattern)
                     regexp_raw = re.compile(pattern.encode(dbc_import_encoding))
                     temp = regexp.match(decoded)
-                    temp_raw = regexp_raw.match(l)
+                    temp_raw = regexp_raw.match(original_line)
                     receiver = [b.strip() for b in temp.group(12).split(',')]
                     multiplex = temp.group(2)  # type: str
 
