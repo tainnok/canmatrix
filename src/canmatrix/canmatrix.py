@@ -440,10 +440,10 @@ class Signal(object):
                 "Value {} is not valid for {}. Min={} and Max={}".format(
                     value, self, self.min, self.max)
                 )
-        raw_value = (value - self.offset) / self.factor
+        raw_value = (value - self.float_factory(self.offset)) / self.float_factory(self.factor)
 
         if not self.is_float:
-            raw_value = int(raw_value)
+            raw_value = int(round(raw_value))
         return raw_value
 
     def raw2phys(self, value, decode_to_str=False):
