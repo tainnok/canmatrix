@@ -132,6 +132,7 @@ def convert(infile, out_file_name, **options):  # type: (str, str, **str) -> Non
             for renameTuple in rename_tuples:
                 old, new = renameTuple.split(':')
                 db.rename_frame(old, new)
+                    
         if 'deleteFrame' in options and options['deleteFrame'] is not None:
             delete_frame_names = options['deleteFrame'].split(',')
             for frame_name in delete_frame_names:
@@ -227,6 +228,13 @@ def convert(infile, out_file_name, **options):  # type: (str, str, **str) -> Non
                 'deleteObsoleteEcus']:
             db.delete_obsolete_ecus()
 
+        if 'compressFrame' in options and options['compressFrame'] is not None:
+            frames_cmdline = options['compressFrame'].split(',')
+            for frame_name in frames_cmdline:
+                frames = db.glob_frames(frame_name)
+                for frame in frames:
+                    frame.compress()
+
         if 'recalcDLC' in options and options['recalcDLC']:
             db.recalc_dlc(options['recalcDLC'])
 
@@ -250,6 +258,10 @@ def convert(infile, out_file_name, **options):  # type: (str, str, **str) -> Non
         if options.get('signalNameFromAttrib') is not None:
             for signal in [b for a in db for b in a.signals]:
                 signal.name = signal.attributes.get(options.get('signalNameFromAttrib'), signal.name)
+
+        if options.get('frameNameFromAttrib') is not None:
+            for frame in db:
+                frame.name = frame.attributes.get(options.get('frameNameFromAttrib'), frame.name)
 
         # Max Signal Value Calculation , if max value is 0
         if options.get('calcSignalMaximumsWhereZero') is not None and options['calcSignalMaximumsWhereZero']:
