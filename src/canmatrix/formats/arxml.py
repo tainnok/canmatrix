@@ -1401,6 +1401,10 @@ def containters_are_little_endian(ea):
     logger.debug("CONTAINER-I-PDU-HEADER-BYTE-ORDER not found (default big endian)")
     return False
 
+def _get_frame_from_container_ipdu_no_header_special_handling(pdu, target_frame, ea, float_factory, headers_are_littleendian):
+    get_frame()
+    pass
+
 
 def get_frame_from_container_ipdu(pdu, target_frame, ea, float_factory, headers_are_littleendian):
     target_frame.is_fd = True
@@ -1408,6 +1412,7 @@ def get_frame_from_container_ipdu(pdu, target_frame, ea, float_factory, headers_
     header_type = ea.get_child(pdu, "HEADER-TYPE").text
 
     header_type_params = {
+        # Tuple of id-length and dlc-length
         "SHORT-HEADER": (24, 8),
         "LONG-HEADER": (32, 32),
     }
@@ -1456,15 +1461,67 @@ def get_frame_from_container_ipdu(pdu, target_frame, ea, float_factory, headers_
         if header_id is not None:
             header_id = int(header_id, 0)
 
+        try:
+            offset_bytes = int(ea.get_child(ipdu, "OFFSET").text, 0)
+        except:
+            offset_bytes = 0
+
+        ipdu_name = ea.get_element_name(ipdu)
+        ipdu_length = int(ea.get_child(ipdu, "LENGTH").text, 0)
+        sec_oc_cfg = None
         if ipdu is not None and 'SECURED-I-PDU' in ipdu.tag:
+            # fill secOc Information
+            use_as_cryptographic_i_pdu = ea.get_child(ipdu, "USE-AS-CRYPTOGRAPHIC-I-PDU")
+            if use_as_cryptographic_i_pdu is None:
+                use_as_cryptographic_i_pdu = False
+            elif isinstance(use_as_cryptographic_i_pdu.text, str):
+                use_as_cryptographic_i_pdu = use_as_cryptographic_i_pdu.text.lower() in ['true', '1']
+            else:
+                use_as_cryptographic_i_pdu = False
+            sec_oc_cfg = {
+                'use_as_cryptographic_i_pdu': use_as_cryptographic_i_pdu,
+            }
+            msg_link_length = ea.get_child(ipdu, "MESSAGE-LINK-LENGTH")
+            msg_link_position = ea.get_child(ipdu, "MESSAGE-LINK-POSITION")
+            if msg_link_length is not None and msg_link_position is not None:
+                sec_oc_cfg['msg_link_length'] = int(msg_link_length.text)
+                sec_oc_cfg['msg_link_position'] = int(msg_link_position.text)
+            data_id = ea.get_child(ipdu, "DATA-ID")
+            if data_id is not None:
+                sec_oc_cfg['data_id'] = int(data_id.text)
+            freshness_value_id = ea.get_child(ipdu, "FRESHNESS-VALUE-ID")
+            if freshness_value_id is not None:
+                sec_oc_cfg['freshness_value_id'] = int(freshness_value_id.text)
+            authentication_props = ea.follow_ref(ipdu, "AUTHENTICATION-PROPS-REF")
+            if authentication_props is not None:
+                auth_algo = ea.get_child(authentication_props, "AUTH-ALGORITHM")
+                if auth_algo is not None:
+                    sec_oc_cfg['auth_algo'] = auth_algo.text
+                auth_info_tx_length = ea.get_child(authentication_props, "AUTH-INFO-TX-LENGTH")
+                if auth_info_tx_length is not None:
+                    sec_oc_cfg['auth_info_tx_length'] = int(auth_info_tx_length.text)
+            freshness_props = ea.follow_ref(ipdu, "FRESHNESS-PROPS-REF")
+            if freshness_props is not None:
+                freshness_value_length = ea.get_child(freshness_props, "FRESHNESS-VALUE-LENGTH")
+                if freshness_value_length is not None:
+                    sec_oc_cfg['freshness_value_length'] = int(freshness_value_length.text)
+                freshness_value_tx_length = ea.get_child(freshness_props, "FRESHNESS-VALUE-TX-LENGTH")
+                if freshness_value_tx_length is not None:
+                    sec_oc_cfg['freshness_value_tx_length'] = int(freshness_value_tx_length.text)
+                use_freshness_timestamp = ea.get_child(freshness_props, "USE-FRESHNESS-TIMESTAMP")
+                if use_freshness_timestamp is None:
+                    use_freshness_timestamp = False
+                elif isinstance(use_freshness_timestamp.text, str):
+                    use_freshness_timestamp = use_freshness_timestamp.text in ['true', '1']
+                else:
+                    use_freshness_timestamp = False
+                sec_oc_cfg['use_freshness_timestamp'] = use_freshness_timestamp
+
+            # dissolve SECURED-I-PDU by Payload-PDU
             secured_i_pdu_name = ea.get_element_name(ipdu)
             payload = ea.follow_ref(ipdu, "PAYLOAD-REF")
             ipdu = ea.follow_ref(payload, "I-PDU-REF")
             logger.info("found secured pdu '%s', dissolved to '%s'", secured_i_pdu_name, ea.get_element_name(ipdu))
-        try:
-            offset = int(ea.get_child(ipdu, "OFFSET").text, 0) * 8
-        except:
-            offset = 0
 
         try:
             pdu_type = ipdu.attrib["DEST"]
@@ -1474,14 +1531,13 @@ def get_frame_from_container_ipdu(pdu, target_frame, ea, float_factory, headers_
             pdu_port_type = ea.get_child(cpdu, "I-PDU-PORT-REF").attrib["DEST"]
         except (AttributeError, KeyError):
             pdu_port_type = ""
-        ipdu_length = int(ea.get_child(ipdu, "LENGTH").text, 0)
-        ipdu_name = ea.get_element_name(ipdu)
         ipdu_triggering_name = ea.get_element_name(cpdu)
         target_pdu = canmatrix.Pdu(name=ipdu_name, size=ipdu_length, id=header_id,
                                    triggering_name=ipdu_triggering_name, pdu_type=pdu_type,
-                                   port_type=pdu_port_type, cycle_time=cycle_time)
+                                   port_type=pdu_port_type, cycle_time=cycle_time,
+                                   offset=offset_bytes, sec_oc_cfg=sec_oc_cfg)
         pdu_sig_mapping = ea.get_children(ipdu, "I-SIGNAL-TO-I-PDU-MAPPING")
-        get_signals(pdu_sig_mapping, target_pdu, ea, None, float_factory, bit_offset=offset)
+        get_signals(pdu_sig_mapping, target_pdu, ea, None, float_factory, bit_offset=offset_bytes*8)
         target_frame.add_pdu(target_pdu)
 
 
@@ -1523,6 +1579,69 @@ def store_frame_timings(target_frame, cyclic_timing, event_timing, minimum_delay
             target_frame.cycle_time = int(float_factory(value.text) * 1000)
 
 
+def _get_arbitration_id_from_frame_triggering(ea, frame_triggering):
+    address_mode = ea.get_child(frame_triggering, "CAN-ADDRESSING-MODE")
+    arb_id = ea.get_child(frame_triggering, "IDENTIFIER")
+    arbitration_id = int(arb_id.text, 0)
+    if address_mode is not None and address_mode.text == 'EXTENDED':
+        return canmatrix.ArbitrationId(arbitration_id, extended=True)
+    else:
+        return canmatrix.ArbitrationId(arbitration_id, extended=False)
+
+def _get_is_fd_from_frame_triggering(ea, frame_triggering):
+    frame_rx_behaviour_elem = ea.get_child(frame_triggering, "CAN-FRAME-RX-BEHAVIOR")
+    frame_tx_behaviour_elem = ea.get_child(frame_triggering, "CAN-FRAME-TX-BEHAVIOR")
+    is_fd_elem = ea.get_child(frame_triggering, "CAN-FD-FRAME-SUPPORT")
+    if (frame_rx_behaviour_elem is not None and frame_rx_behaviour_elem.text == 'CAN-FD') or \
+            (frame_tx_behaviour_elem is not None and frame_tx_behaviour_elem.text == 'CAN-FD') or \
+            (is_fd_elem is not None and is_fd_elem.text == 'TRUE'):
+        return True
+    else:
+        return False
+
+def add_signals_of_pdu_to_frame(ea, frame_triggering, frame, pdu, float_factory):
+    isignaltriggerings_of_current_cluster = ea.selector(frame_triggering, "/..//I-SIGNAL-TRIGGERING")   # TODO KONNI ... da bekommen wir eine riesige Liste!!??!!
+
+    try:
+        offset_bits = int(ea.get_child(pdu, "OFFSET").text, 0) * 8
+    except:
+        offset_bits = 0
+
+    # search for signals of pdu
+    pdu_sig_mapping = ea.selector(pdu, "//I-SIGNAL-TO-I-PDU-MAPPING")
+    if pdu_sig_mapping:
+        get_signals(pdu_sig_mapping, frame, ea, None, float_factory, bit_offset=offset_bits,
+                    signal_triggerings=isignaltriggerings_of_current_cluster)
+    # Seen some pdu_sig_mapping being [] and not None with some arxml 4.2
+    else:  # AR 4.2
+        pdu_trigs = ea.follow_all_ref(frame_triggering, "PDU-TRIGGERING-REF")
+        if pdu_trigs is not None:
+            for pdu_trig in pdu_trigs:
+                trig_ref_cond = ea.get_child(pdu_trig, "PDU-TRIGGERING-REF-CONDITIONAL")
+                if trig_ref_cond:
+                    trigs = ea.follow_ref(trig_ref_cond, "PDU-TRIGGERING-REF")
+                    ipdus = ea.follow_ref(trigs, "I-PDU-REF")
+                else:
+                    ipdus = ea.follow_ref(pdu_trig, "I-PDU-REF")
+
+                if ipdus:
+                    signal_to_pdu_maps = ea.get_child(ipdus, "I-SIGNAL-TO-PDU-MAPPINGS")
+                    if signal_to_pdu_maps is None:
+                        signal_to_pdu_maps = ea.get_child(ipdus, "I-SIGNAL-TO-I-PDU-MAPPINGS")
+                else:
+                    signal_to_pdu_maps = None
+
+                if signal_to_pdu_maps is None:
+                    logger.debug("AR4.x PDU %s no SIGNAL-TO-PDU-MAPPINGS found - no signal extraction!",
+                                 ea.get_element_name(ipdus))
+                else:
+                    # signal_to_pdu_map = get_children(signal_to_pdu_maps, "I-SIGNAL-TO-I-PDU-MAPPING", arDict, ns)
+                    get_signals(signal_to_pdu_maps, frame, ea, None,
+                                float_factory,  bit_offset=offset_bits,
+                                signal_triggerings=isignaltriggerings_of_current_cluster)  # todo BUG expects list, not item
+        else:
+            logger.debug("Frame %s (assuming AR4.2) no PDU-TRIGGERINGS found", frame.name)
+
 def get_frame(frame_triggering, ea, multiplex_translation, float_factory, headers_are_littleendian):
     # type: (_Element, _DocRoot, dict, typing.Callable, bool) -> typing.Union[canmatrix.Frame, None]
     global frames_cache
@@ -1534,26 +1653,48 @@ def get_frame(frame_triggering, ea, multiplex_translation, float_factory, header
     if arb_id is None:
         logger.info("found Frame-Trigger %s without arbitration id", frame_trig_name_elem.text)
         return None
-    arbitration_id = int(arb_id.text, 0)
-    isignaltriggerings_of_current_cluster = ea.selector(frame_triggering, "/..//I-SIGNAL-TRIGGERING")
+    # isignaltriggerings_of_current_cluster = ea.selector(frame_triggering, "/..//I-SIGNAL-TRIGGERING")
+    arbitration_id = _get_arbitration_id_from_frame_triggering(ea, frame_triggering)
 
     if frame_elem is not None:
         logger.debug("Frame: %s", ea.get_element_name(frame_elem))
         if frame_elem in frames_cache:
-            return copy.deepcopy(frames_cache[frame_elem])
+            new_frame = copy.deepcopy(frames_cache[frame_elem])
+            # we need to take over the arbitration-id and the is_fd-flag from the frame-trigger!
+            # because the same frame can be part of several frame-trigger!
+            new_frame.arbitration_id = arbitration_id
+            new_frame.is_fd = _get_is_fd_from_frame_triggering(ea, frame_triggering)
+            return new_frame
         dlc_elem = ea.get_child(frame_elem, "FRAME-LENGTH")
         # pdu_mapping = ea.get_child(frame_elem, "PDU-TO-FRAME-MAPPING")
         # pdu = ea.follow_ref(pdu_mapping, "PDU-REF")  # SIGNAL-I-PDU
         pdu = ea.follow_ref(frame_elem, "PDU-REF")  # SIGNAL-I-PDU
 
+        # special handling for container-pdu's which are NO-HEADER Container-PDU's
+        container_sub_pdus = []
+        pdu_name = ea.get_element_name(pdu)  # to keep the pdu-name the same, also when the pdu is replaced
+        if pdu is not None and 'CONTAINER-I-PDU' in pdu.tag:
+            # check if it's a 'NO-HEADER' Container-PDU
+            header_type = ea.get_child(pdu, "HEADER-TYPE").text
+            if header_type not in ["SHORT-HEADER", "LONG-HEADER"]:
+                cpdu_triggers = ea.follow_all_ref(pdu, "CONTAINED-PDU-TRIGGERING-REF")
+                for cpdu_trigger in cpdu_triggers:
+                    ipdu = ea.follow_ref(cpdu_trigger, "I-PDU-REF")
+                    container_sub_pdus.append(ipdu)
+                # sort the container_sub_pdus by the position, important!
+                container_sub_pdus.sort(key=lambda x: int(ea.get_child(x, "OFFSET").text, 0))
+                if len(container_sub_pdus) >= 1:
+                    pdu = container_sub_pdus[0]
+
         if pdu is not None and 'SECURED-I-PDU' in pdu.tag:
             pdu = ea.selector(pdu, ">PAYLOAD-REF>I-PDU-REF")[0]
             # logger.info("found secured pdu - no signal extraction possible: %s", get_element_name(pdu, ns))
 
-        new_frame = canmatrix.Frame(ea.get_element_name(frame_elem), size=int(dlc_elem.text, 0))
+        new_frame = canmatrix.Frame(ea.get_element_name(frame_elem), arbitration_id=arbitration_id,
+                                    size=int(dlc_elem.text, 0))
         comment = ea.get_element_desc(frame_elem)
         if pdu is not None:
-            new_frame.add_attribute("PduName", ea.get_short_name(pdu))
+            new_frame.add_attribute("PduName", pdu_name)
         new_frame.add_attribute("FrameTriggeringName", ea.get_short_name(frame_triggering))
 
         if comment is not None:
@@ -1578,27 +1719,13 @@ def get_frame(frame_triggering, ea, multiplex_translation, float_factory, header
     if pdu is None:
         logger.error("pdu is None")
     else:
-        new_frame.pdu_name = ea.get_element_name(pdu)
+        new_frame.pdu_name = pdu_name
         logger.debug("PDU: " + new_frame.pdu_name)
 
     if new_frame.comment is None:
         new_frame.add_comment(ea.get_element_desc(pdu))
 
-    address_mode = ea.get_child(frame_triggering, "CAN-ADDRESSING-MODE")
-    frame_rx_behaviour_elem = ea.get_child(frame_triggering, "CAN-FRAME-RX-BEHAVIOR")
-    frame_tx_behaviour_elem = ea.get_child(frame_triggering, "CAN-FRAME-TX-BEHAVIOR")
-    is_fd_elem = ea.get_child(frame_triggering, "CAN-FD-FRAME-SUPPORT")
-    if address_mode is not None and address_mode.text == 'EXTENDED':
-        new_frame.arbitration_id = canmatrix.ArbitrationId(arbitration_id, extended=True)
-    else:
-        new_frame.arbitration_id = canmatrix.ArbitrationId(arbitration_id, extended=False)
-
-    if (frame_rx_behaviour_elem is not None and frame_rx_behaviour_elem.text == 'CAN-FD') or \
-            (frame_tx_behaviour_elem is not None and frame_tx_behaviour_elem.text == 'CAN-FD') or \
-            (is_fd_elem is not None and is_fd_elem.text == 'TRUE'):
-        new_frame.is_fd = True
-    else:
-        new_frame.is_fd = False
+    new_frame.is_fd = _get_is_fd_from_frame_triggering(ea, frame_triggering)
 
     timing_spec = ea.get_child(pdu, "I-PDU-TIMING-SPECIFICATION")  # AR 3
     if timing_spec is None:
@@ -1623,30 +1750,43 @@ def get_frame(frame_triggering, ea, multiplex_translation, float_factory, header
     elif pdu is not None and pdu.tag == ea.ns + "CONTAINER-I-PDU":
         get_frame_from_container_ipdu(pdu, new_frame, ea, float_factory, headers_are_littleendian)
     else:
-        pdu_sig_mapping = ea.selector(pdu, "//I-SIGNAL-TO-I-PDU-MAPPING")
-        if pdu_sig_mapping:
-            get_signals(pdu_sig_mapping, new_frame, ea, None, float_factory, signal_triggerings=isignaltriggerings_of_current_cluster)
-        # Seen some pdu_sig_mapping being [] and not None with some arxml 4.2
-        else:  # AR 4.2
-            pdu_trigs = ea.follow_all_ref(frame_triggering, "PDU-TRIGGERINGS-REF")
-            if pdu_trigs is not None:
-                for pdu_trig in pdu_trigs:
-                    trig_ref_cond = ea.get_child(pdu_trig, "PDU-TRIGGERING-REF-CONDITIONAL")
-                    trigs = ea.follow_ref(trig_ref_cond, "PDU-TRIGGERING-REF")
-                    ipdus = ea.follow_ref(trigs, "I-PDU-REF")
-
-                    signal_to_pdu_maps = ea.get_child(ipdus, "I-SIGNAL-TO-PDU-MAPPINGS")
-                    if signal_to_pdu_maps is None:
-                        signal_to_pdu_maps = ea.get_child(ipdus, "I-SIGNAL-TO-I-PDU-MAPPINGS")
-
-                    if signal_to_pdu_maps is None:
-                        logger.debug("AR4.x PDU %s no SIGNAL-TO-PDU-MAPPINGS found - no signal extraction!",
-                                     ea.get_element_name(ipdus))
-                    # signal_to_pdu_map = get_children(signal_to_pdu_maps, "I-SIGNAL-TO-I-PDU-MAPPING", arDict, ns)
-                    get_signals(signal_to_pdu_maps, new_frame, ea, None,
-                                float_factory, signal_triggerings=isignaltriggerings_of_current_cluster)  # todo BUG expects list, not item
-            else:
-                logger.debug("Frame %s (assuming AR4.2) no PDU-TRIGGERINGS found", new_frame.name)
+        add_signals_of_pdu_to_frame(ea, frame_triggering, new_frame, pdu, float_factory)
+        for sub_pdu in container_sub_pdus[1:]:
+            if "SECURED-I-PDU" in sub_pdu.tag:
+                continue
+            add_signals_of_pdu_to_frame(ea, frame_triggering, new_frame, sub_pdu, float_factory)
+        # # search for signals of pdu
+        # pdu_sig_mapping = ea.selector(pdu, "//I-SIGNAL-TO-I-PDU-MAPPING")
+        # if pdu_sig_mapping:
+        #     get_signals(pdu_sig_mapping, new_frame, ea, None, float_factory, signal_triggerings=isignaltriggerings_of_current_cluster)
+        # # Seen some pdu_sig_mapping being [] and not None with some arxml 4.2
+        # else:  # AR 4.2
+        #     pdu_trigs = ea.follow_all_ref(frame_triggering, "PDU-TRIGGERING-REF")
+        #     if pdu_trigs is not None:
+        #         for pdu_trig in pdu_trigs:
+        #             trig_ref_cond = ea.get_child(pdu_trig, "PDU-TRIGGERING-REF-CONDITIONAL")
+        #             if trig_ref_cond:
+        #                 trigs = ea.follow_ref(trig_ref_cond, "PDU-TRIGGERING-REF")
+        #                 ipdus = ea.follow_ref(trigs, "I-PDU-REF")
+        #             else:
+        #                 ipdus = ea.follow_ref(pdu_trig, "I-PDU-REF")
+        #
+        #             if ipdus:
+        #                 signal_to_pdu_maps = ea.get_child(ipdus, "I-SIGNAL-TO-PDU-MAPPINGS")
+        #                 if signal_to_pdu_maps is None:
+        #                     signal_to_pdu_maps = ea.get_child(ipdus, "I-SIGNAL-TO-I-PDU-MAPPINGS")
+        #             else:
+        #                 signal_to_pdu_maps = None
+        #
+        #             if signal_to_pdu_maps is None:
+        #                 logger.debug("AR4.x PDU %s no SIGNAL-TO-PDU-MAPPINGS found - no signal extraction!",
+        #                              ea.get_element_name(ipdus))
+        #             else:
+        #                 # signal_to_pdu_map = get_children(signal_to_pdu_maps, "I-SIGNAL-TO-I-PDU-MAPPING", arDict, ns)
+        #                 get_signals(signal_to_pdu_maps, new_frame, ea, None,
+        #                             float_factory, signal_triggerings=isignaltriggerings_of_current_cluster)  # todo BUG expects list, not item
+        #     else:
+        #         logger.debug("Frame %s (assuming AR4.2) no PDU-TRIGGERINGS found", new_frame.name)
     if new_frame.is_pdu_container and new_frame.cycle_time == 0:
         cycle_times = {pdu.cycle_time for pdu in new_frame.pdus}
         if len(cycle_times) > 1:
