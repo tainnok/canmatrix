@@ -38,6 +38,7 @@ import canmatrix
 import canmatrix.types
 import canmatrix.utils
 import re
+from pprint import pformat
 
 logger = logging.getLogger(__name__)
 # default_float_factory = decimal.Decimal
@@ -1401,10 +1402,61 @@ def containters_are_little_endian(ea):
     logger.debug("CONTAINER-I-PDU-HEADER-BYTE-ORDER not found (default big endian)")
     return False
 
-def _get_frame_from_container_ipdu_no_header_special_handling(pdu, target_frame, ea, float_factory, headers_are_littleendian):
-    get_frame()
-    pass
+def _get_sec_oc_cfg(ea, ipdu):
+    if ipdu is None or 'SECURED-I-PDU' not in ipdu.tag:
+        return None
+    # fill secOc Information
 
+    payload_ref = ea.follow_ref(ipdu, "PAYLOAD-REF")
+    payload_ipdu = ea.follow_ref(payload_ref, "I-PDU-REF")
+    sec_oc_cfg = {
+        'payload_pdu_name': ea.get_element_name(payload_ipdu)
+    }
+
+    use_as_cryptographic_i_pdu = ea.get_child(ipdu, "USE-AS-CRYPTOGRAPHIC-I-PDU")
+    if use_as_cryptographic_i_pdu is None:
+        use_as_cryptographic_i_pdu = False
+    elif isinstance(use_as_cryptographic_i_pdu.text, str):
+        use_as_cryptographic_i_pdu = use_as_cryptographic_i_pdu.text.lower() in ['true', '1']
+    else:
+        use_as_cryptographic_i_pdu = False
+    sec_oc_cfg['use_as_cryptographic_i_pdu']: use_as_cryptographic_i_pdu
+    msg_link_length = ea.get_child(ipdu, "MESSAGE-LINK-LENGTH")
+    msg_link_position = ea.get_child(ipdu, "MESSAGE-LINK-POSITION")
+    if msg_link_length is not None and msg_link_position is not None:
+        sec_oc_cfg['msg_link_length'] = int(msg_link_length.text)
+        sec_oc_cfg['msg_link_position'] = int(msg_link_position.text)
+    data_id = ea.get_child(ipdu, "DATA-ID")
+    if data_id is not None:
+        sec_oc_cfg['data_id'] = int(data_id.text)
+    freshness_value_id = ea.get_child(ipdu, "FRESHNESS-VALUE-ID")
+    if freshness_value_id is not None:
+        sec_oc_cfg['freshness_value_id'] = int(freshness_value_id.text)
+    authentication_props = ea.follow_ref(ipdu, "AUTHENTICATION-PROPS-REF")
+    if authentication_props is not None:
+        auth_algo = ea.get_child(authentication_props, "AUTH-ALGORITHM")
+        if auth_algo is not None:
+            sec_oc_cfg['auth_algo'] = auth_algo.text
+        auth_info_tx_length = ea.get_child(authentication_props, "AUTH-INFO-TX-LENGTH")
+        if auth_info_tx_length is not None:
+            sec_oc_cfg['auth_info_tx_length'] = int(auth_info_tx_length.text)
+    freshness_props = ea.follow_ref(ipdu, "FRESHNESS-PROPS-REF")
+    if freshness_props is not None:
+        freshness_value_length = ea.get_child(freshness_props, "FRESHNESS-VALUE-LENGTH")
+        if freshness_value_length is not None:
+            sec_oc_cfg['freshness_value_length'] = int(freshness_value_length.text)
+        freshness_value_tx_length = ea.get_child(freshness_props, "FRESHNESS-VALUE-TX-LENGTH")
+        if freshness_value_tx_length is not None:
+            sec_oc_cfg['freshness_value_tx_length'] = int(freshness_value_tx_length.text)
+        use_freshness_timestamp = ea.get_child(freshness_props, "USE-FRESHNESS-TIMESTAMP")
+        if use_freshness_timestamp is None:
+            use_freshness_timestamp = False
+        elif isinstance(use_freshness_timestamp.text, str):
+            use_freshness_timestamp = use_freshness_timestamp.text in ['true', '1']
+        else:
+            use_freshness_timestamp = False
+        sec_oc_cfg['use_freshness_timestamp'] = use_freshness_timestamp
+    return sec_oc_cfg
 
 def get_frame_from_container_ipdu(pdu, target_frame, ea, float_factory, headers_are_littleendian):
     target_frame.is_fd = True
@@ -1470,53 +1522,7 @@ def get_frame_from_container_ipdu(pdu, target_frame, ea, float_factory, headers_
         ipdu_length = int(ea.get_child(ipdu, "LENGTH").text, 0)
         sec_oc_cfg = None
         if ipdu is not None and 'SECURED-I-PDU' in ipdu.tag:
-            # fill secOc Information
-            use_as_cryptographic_i_pdu = ea.get_child(ipdu, "USE-AS-CRYPTOGRAPHIC-I-PDU")
-            if use_as_cryptographic_i_pdu is None:
-                use_as_cryptographic_i_pdu = False
-            elif isinstance(use_as_cryptographic_i_pdu.text, str):
-                use_as_cryptographic_i_pdu = use_as_cryptographic_i_pdu.text.lower() in ['true', '1']
-            else:
-                use_as_cryptographic_i_pdu = False
-            sec_oc_cfg = {
-                'use_as_cryptographic_i_pdu': use_as_cryptographic_i_pdu,
-            }
-            msg_link_length = ea.get_child(ipdu, "MESSAGE-LINK-LENGTH")
-            msg_link_position = ea.get_child(ipdu, "MESSAGE-LINK-POSITION")
-            if msg_link_length is not None and msg_link_position is not None:
-                sec_oc_cfg['msg_link_length'] = int(msg_link_length.text)
-                sec_oc_cfg['msg_link_position'] = int(msg_link_position.text)
-            data_id = ea.get_child(ipdu, "DATA-ID")
-            if data_id is not None:
-                sec_oc_cfg['data_id'] = int(data_id.text)
-            freshness_value_id = ea.get_child(ipdu, "FRESHNESS-VALUE-ID")
-            if freshness_value_id is not None:
-                sec_oc_cfg['freshness_value_id'] = int(freshness_value_id.text)
-            authentication_props = ea.follow_ref(ipdu, "AUTHENTICATION-PROPS-REF")
-            if authentication_props is not None:
-                auth_algo = ea.get_child(authentication_props, "AUTH-ALGORITHM")
-                if auth_algo is not None:
-                    sec_oc_cfg['auth_algo'] = auth_algo.text
-                auth_info_tx_length = ea.get_child(authentication_props, "AUTH-INFO-TX-LENGTH")
-                if auth_info_tx_length is not None:
-                    sec_oc_cfg['auth_info_tx_length'] = int(auth_info_tx_length.text)
-            freshness_props = ea.follow_ref(ipdu, "FRESHNESS-PROPS-REF")
-            if freshness_props is not None:
-                freshness_value_length = ea.get_child(freshness_props, "FRESHNESS-VALUE-LENGTH")
-                if freshness_value_length is not None:
-                    sec_oc_cfg['freshness_value_length'] = int(freshness_value_length.text)
-                freshness_value_tx_length = ea.get_child(freshness_props, "FRESHNESS-VALUE-TX-LENGTH")
-                if freshness_value_tx_length is not None:
-                    sec_oc_cfg['freshness_value_tx_length'] = int(freshness_value_tx_length.text)
-                use_freshness_timestamp = ea.get_child(freshness_props, "USE-FRESHNESS-TIMESTAMP")
-                if use_freshness_timestamp is None:
-                    use_freshness_timestamp = False
-                elif isinstance(use_freshness_timestamp.text, str):
-                    use_freshness_timestamp = use_freshness_timestamp.text in ['true', '1']
-                else:
-                    use_freshness_timestamp = False
-                sec_oc_cfg['use_freshness_timestamp'] = use_freshness_timestamp
-
+            sec_oc_cfg = _get_sec_oc_cfg(ea, ipdu)
             # dissolve SECURED-I-PDU by Payload-PDU
             secured_i_pdu_name = ea.get_element_name(ipdu)
             payload = ea.follow_ref(ipdu, "PAYLOAD-REF")
@@ -1696,6 +1702,24 @@ def get_frame(frame_triggering, ea, multiplex_translation, float_factory, header
         if pdu is not None:
             new_frame.add_attribute("PduName", pdu_name)
         new_frame.add_attribute("FrameTriggeringName", ea.get_short_name(frame_triggering))
+
+        if container_sub_pdus:
+            new_frame.add_attribute("subPDUs", ", ".join([ea.get_short_name(pdu) for pdu in container_sub_pdus]))
+            sec_oc_cfg = {}
+            for ipdu in container_sub_pdus:
+                ipdu_name = ea.get_short_name(ipdu)
+                _sec_oc_cfg = _get_sec_oc_cfg(ea, ipdu)
+                if _sec_oc_cfg:
+                    sec_oc_cfg[ipdu_name] = _sec_oc_cfg
+                    if 'msg_link_position' in sec_oc_cfg[ipdu_name]:
+                        payload_ref = ea.follow_ref(ipdu, "PAYLOAD-REF")
+                        payload_ipdu = ea.follow_ref(payload_ref, "I-PDU-REF")
+                        _sec_oc_cfg['msg_link_position_abs_frame_source'] =  int(ea.get_child(payload_ipdu, "OFFSET").text, 0) * 8 + _sec_oc_cfg['msg_link_position']
+
+                        local_msg_link_position_dest = _sec_oc_cfg['auth_info_tx_length'] + _sec_oc_cfg['freshness_value_tx_length']
+                        _sec_oc_cfg['msg_link_position_abs_frame_dest'] =  int(ea.get_child(ipdu, "OFFSET").text, 0) * 8 + local_msg_link_position_dest
+            new_frame.add_attribute("sec_oc_cfg", pformat(sec_oc_cfg))
+
 
         if comment is not None:
             new_frame.add_comment(comment)
