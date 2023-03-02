@@ -1409,9 +1409,12 @@ def _get_sec_oc_cfg(ea, ipdu):
 
     payload_ref = ea.follow_ref(ipdu, "PAYLOAD-REF")
     payload_ipdu = ea.follow_ref(payload_ref, "I-PDU-REF")
-    sec_oc_cfg = {
-        'payload_pdu_name': ea.get_element_name(payload_ipdu)
-    }
+    sec_oc_cfg = {'payload_pdu_name': ea.get_element_name(payload_ipdu),
+                  'payload_pdu_length_bit': int(ea.get_child(ipdu, "LENGTH").text, 0) * 8}
+    if ea.get_child(payload_ipdu, "OFFSET") !=None:
+        sec_oc_cfg['payload_pdu_startposition_bit'] = int(ea.get_child(payload_ipdu, "OFFSET").text, 0) * 8
+    else:
+        sec_oc_cfg['payload_pdu_startposition_bit'] = 0
 
     use_as_cryptographic_i_pdu = ea.get_child(ipdu, "USE-AS-CRYPTOGRAPHIC-I-PDU")
     if use_as_cryptographic_i_pdu is None:
@@ -1692,7 +1695,22 @@ def get_frame(frame_triggering, ea, multiplex_translation, float_factory, header
                 if len(container_sub_pdus) >= 1:
                     pdu = container_sub_pdus[0]
 
+        sec_oc_cfg = {}
         if pdu is not None and 'SECURED-I-PDU' in pdu.tag:
+            _sec_oc_cfg = _get_sec_oc_cfg(ea, pdu)
+            if _sec_oc_cfg:
+                _ipdu_name = ea.get_short_name(pdu)
+                sec_oc_cfg[_ipdu_name] = _sec_oc_cfg
+                if 'msg_link_position' in sec_oc_cfg[_ipdu_name]:
+                    payload_ref = ea.follow_ref(pdu, "PAYLOAD-REF")
+                    payload_ipdu = ea.follow_ref(payload_ref, "I-PDU-REF")
+                    _sec_oc_cfg['msg_link_position_abs_frame_source'] = int(ea.get_child(payload_ipdu, "OFFSET").text,
+                                                                            0) * 8 + _sec_oc_cfg['msg_link_position']
+
+                    local_msg_link_position_dest = _sec_oc_cfg['auth_info_tx_length'] + _sec_oc_cfg[
+                        'freshness_value_tx_length']
+                    _sec_oc_cfg['msg_link_position_abs_frame_dest'] = int(ea.get_child(pdu, "OFFSET").text,
+                                                                          0) * 8 + local_msg_link_position_dest
             pdu = ea.selector(pdu, ">PAYLOAD-REF>I-PDU-REF")[0]
             # logger.info("found secured pdu - no signal extraction possible: %s", get_element_name(pdu, ns))
 
@@ -1705,7 +1723,6 @@ def get_frame(frame_triggering, ea, multiplex_translation, float_factory, header
 
         if container_sub_pdus:
             new_frame.add_attribute("subPDUs", ", ".join([ea.get_short_name(pdu) for pdu in container_sub_pdus]))
-            sec_oc_cfg = {}
             for ipdu in container_sub_pdus:
                 ipdu_name = ea.get_short_name(ipdu)
                 _sec_oc_cfg = _get_sec_oc_cfg(ea, ipdu)
@@ -1718,6 +1735,7 @@ def get_frame(frame_triggering, ea, multiplex_translation, float_factory, header
 
                         local_msg_link_position_dest = _sec_oc_cfg['auth_info_tx_length'] + _sec_oc_cfg['freshness_value_tx_length']
                         _sec_oc_cfg['msg_link_position_abs_frame_dest'] =  int(ea.get_child(ipdu, "OFFSET").text, 0) * 8 + local_msg_link_position_dest
+        if sec_oc_cfg:
             new_frame.add_attribute("sec_oc_cfg", pformat(sec_oc_cfg))
 
 
