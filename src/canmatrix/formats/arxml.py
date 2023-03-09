@@ -1410,7 +1410,7 @@ def _get_sec_oc_cfg(ea, ipdu):
     payload_ref = ea.follow_ref(ipdu, "PAYLOAD-REF")
     payload_ipdu = ea.follow_ref(payload_ref, "I-PDU-REF")
     sec_oc_cfg = {'payload_pdu_name': ea.get_element_name(payload_ipdu),
-                  'payload_pdu_length_bit': int(ea.get_child(ipdu, "LENGTH").text, 0) * 8}
+                  'payload_pdu_length_byte': int(ea.get_child(payload_ipdu, "LENGTH").text, 0)}
     if ea.get_child(payload_ipdu, "OFFSET") !=None:
         sec_oc_cfg['payload_pdu_startposition_bit'] = int(ea.get_child(payload_ipdu, "OFFSET").text, 0) * 8
     else:
