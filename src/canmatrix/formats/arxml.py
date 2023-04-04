@@ -1528,6 +1528,28 @@ def store_frame_timings(target_frame, cyclic_timing, event_timing, minimum_delay
             target_frame.cycle_time = int(float_factory(value.text) * 1000)
 
 
+def _get_arbitration_id_from_frame_triggering(ea, frame_triggering):
+    address_mode = ea.get_child(frame_triggering, "CAN-ADDRESSING-MODE")
+    arb_id = ea.get_child(frame_triggering, "IDENTIFIER")
+    arbitration_id = int(arb_id.text, 0)
+    if address_mode is not None and address_mode.text == 'EXTENDED':
+        return canmatrix.ArbitrationId(arbitration_id, extended=True)
+    else:
+        return canmatrix.ArbitrationId(arbitration_id, extended=False)
+
+
+def _get_is_fd_from_frame_triggering(ea, frame_triggering):
+    frame_rx_behaviour_elem = ea.get_child(frame_triggering, "CAN-FRAME-RX-BEHAVIOR")
+    frame_tx_behaviour_elem = ea.get_child(frame_triggering, "CAN-FRAME-TX-BEHAVIOR")
+    is_fd_elem = ea.get_child(frame_triggering, "CAN-FD-FRAME-SUPPORT")
+    if (frame_rx_behaviour_elem is not None and frame_rx_behaviour_elem.text == 'CAN-FD') or \
+            (frame_tx_behaviour_elem is not None and frame_tx_behaviour_elem.text == 'CAN-FD') or \
+            (is_fd_elem is not None and is_fd_elem.text == 'TRUE'):
+        return True
+    else:
+        return False
+
+
 def get_frame(frame_triggering, ea, multiplex_translation, float_factory, headers_are_littleendian):
     # type: (_Element, _DocRoot, dict, typing.Callable, bool) -> typing.Union[canmatrix.Frame, None]
     global frames_cache
@@ -1539,13 +1561,18 @@ def get_frame(frame_triggering, ea, multiplex_translation, float_factory, header
     if arb_id is None:
         logger.info("found Frame-Trigger %s without arbitration id", frame_trig_name_elem.text)
         return None
-    arbitration_id = int(arb_id.text, 0)
+    arbitration_id = _get_arbitration_id_from_frame_triggering(ea, frame_triggering)
     isignaltriggerings_of_current_cluster = ea.selector(frame_triggering, "/..//I-SIGNAL-TRIGGERING")
 
     if frame_elem is not None:
         logger.debug("Frame: %s", ea.get_element_name(frame_elem))
         if frame_elem in frames_cache:
-            return copy.deepcopy(frames_cache[frame_elem])
+            new_frame = copy.deepcopy(frames_cache[frame_elem])
+            # we need to take over the arbitration-id and the is_fd-flag from the frame-trigger!
+            # because the same frame can be part of several frame-trigger!
+            new_frame.arbitration_id = arbitration_id
+            new_frame.is_fd = _get_is_fd_from_frame_triggering(ea, frame_triggering)
+            return new_frame
         dlc_elem = ea.get_child(frame_elem, "FRAME-LENGTH")
         # pdu_mapping = ea.get_child(frame_elem, "PDU-TO-FRAME-MAPPING")
         # pdu = ea.follow_ref(pdu_mapping, "PDU-REF")  # SIGNAL-I-PDU
@@ -1589,21 +1616,7 @@ def get_frame(frame_triggering, ea, multiplex_translation, float_factory, header
     if new_frame.comment is None:
         new_frame.add_comment(ea.get_element_desc(pdu))
 
-    address_mode = ea.get_child(frame_triggering, "CAN-ADDRESSING-MODE")
-    frame_rx_behaviour_elem = ea.get_child(frame_triggering, "CAN-FRAME-RX-BEHAVIOR")
-    frame_tx_behaviour_elem = ea.get_child(frame_triggering, "CAN-FRAME-TX-BEHAVIOR")
-    is_fd_elem = ea.get_child(frame_triggering, "CAN-FD-FRAME-SUPPORT")
-    if address_mode is not None and address_mode.text == 'EXTENDED':
-        new_frame.arbitration_id = canmatrix.ArbitrationId(arbitration_id, extended=True)
-    else:
-        new_frame.arbitration_id = canmatrix.ArbitrationId(arbitration_id, extended=False)
-
-    if (frame_rx_behaviour_elem is not None and frame_rx_behaviour_elem.text == 'CAN-FD') or \
-            (frame_tx_behaviour_elem is not None and frame_tx_behaviour_elem.text == 'CAN-FD') or \
-            (is_fd_elem is not None and is_fd_elem.text == 'TRUE'):
-        new_frame.is_fd = True
-    else:
-        new_frame.is_fd = False
+    new_frame.is_fd = _get_is_fd_from_frame_triggering(ea, frame_triggering)
 
     timing_spec = ea.get_child(pdu, "I-PDU-TIMING-SPECIFICATION")  # AR 3
     if timing_spec is None:
