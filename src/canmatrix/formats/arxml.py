@@ -1462,9 +1462,9 @@ def get_frame_from_container_ipdu(pdu, target_frame, ea, float_factory, headers_
             ipdu = ea.follow_ref(payload, "I-PDU-REF")
             logger.info("found secured pdu '%s', dissolved to '%s'", secured_i_pdu_name, ea.get_element_name(ipdu))
         try:
-            offset = int(ea.get_child(ipdu, "OFFSET").text, 0) * 8
+            offset_bytes = int(ea.get_child(ipdu, "OFFSET").text, 0)
         except:
-            offset = 0
+            offset_bytes = 0
 
         try:
             pdu_type = ipdu.attrib["DEST"]
@@ -1474,10 +1474,6 @@ def get_frame_from_container_ipdu(pdu, target_frame, ea, float_factory, headers_
             pdu_port_type = ea.get_child(cpdu, "I-PDU-PORT-REF").attrib["DEST"]
         except (AttributeError, KeyError):
             pdu_port_type = ""
-        try:
-            offset_bytes = int(ea.get_child(ipdu, "OFFSET").text, 0)
-        except:
-            offset_bytes = 0
         ipdu_length = int(ea.get_child(ipdu, "LENGTH").text, 0)
         ipdu_name = ea.get_element_name(ipdu)
         ipdu_triggering_name = ea.get_element_name(cpdu)
@@ -1486,7 +1482,7 @@ def get_frame_from_container_ipdu(pdu, target_frame, ea, float_factory, headers_
                                    port_type=pdu_port_type, cycle_time=cycle_time,
                                    offset=offset_bytes)
         pdu_sig_mapping = ea.get_children(ipdu, "I-SIGNAL-TO-I-PDU-MAPPING")
-        get_signals(pdu_sig_mapping, target_pdu, ea, None, float_factory, bit_offset=offset)
+        get_signals(pdu_sig_mapping, target_pdu, ea, None, float_factory, bit_offset=offset_bytes*8)
         target_frame.add_pdu(target_pdu)
 
 
