@@ -791,6 +791,7 @@ class Pdu(object):
     signals = attr.ib(factory=list)  # type: typing.MutableSequence[Signal]
     signalGroups = attr.ib(factory=list)  # type: typing.MutableSequence[SignalGroup]
     cycle_time = attr.ib(default=0)  # type: int
+    offset = attr.ib(default=0)  # type: int
 
     def add_signal(self, signal):
         # type: (Signal) -> Signal
