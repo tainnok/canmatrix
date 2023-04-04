@@ -1402,6 +1402,19 @@ def containters_are_little_endian(ea):
     return False
 
 
+def _is_ipdu_cryptographic_pdu(ea, ipdu):
+    if 'SECURED-I-PDU' not in ipdu.tag:
+        # ipdu is not a secured-I-PDU, so it can not be a cryptographic-pdu
+        # maybe throw an exception instead of return False?
+        return False
+    use_as_cryptographic_i_pdu = ea.get_child(ipdu, "USE-AS-CRYPTOGRAPHIC-I-PDU")
+    if use_as_cryptographic_i_pdu is None:
+        return False
+    elif isinstance(use_as_cryptographic_i_pdu.text, str):
+        return use_as_cryptographic_i_pdu.text.lower() in ['true', '1']
+    else:
+        return False
+
 def get_frame_from_container_ipdu(pdu, target_frame, ea, float_factory, headers_are_littleendian):
     target_frame.is_fd = True
     pdus = ea.follow_all_ref(pdu, "CONTAINED-PDU-TRIGGERING-REF")
@@ -1458,6 +1471,12 @@ def get_frame_from_container_ipdu(pdu, target_frame, ea, float_factory, headers_
 
         if ipdu is not None and 'SECURED-I-PDU' in ipdu.tag:
             secured_i_pdu_name = ea.get_element_name(ipdu)
+            if _is_ipdu_cryptographic_pdu(ea, ipdu):
+                logger.info("found secured pdu '%s' which is configured as cryptographic-pdu "
+                            "(=does not contain the authentic-pdu) => "
+                            "skip this secured-I-PDU as long as secured-I-PDUs are not supported by canmatrix!",
+                            secured_i_pdu_name)
+                continue
             payload = ea.follow_ref(ipdu, "PAYLOAD-REF")
             ipdu = ea.follow_ref(payload, "I-PDU-REF")
             logger.info("found secured pdu '%s', dissolved to '%s'", secured_i_pdu_name, ea.get_element_name(ipdu))
