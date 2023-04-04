@@ -1582,7 +1582,8 @@ def get_frame(frame_triggering, ea, multiplex_translation, float_factory, header
             pdu = ea.selector(pdu, ">PAYLOAD-REF>I-PDU-REF")[0]
             # logger.info("found secured pdu - no signal extraction possible: %s", get_element_name(pdu, ns))
 
-        new_frame = canmatrix.Frame(ea.get_element_name(frame_elem), size=int(dlc_elem.text, 0))
+        new_frame = canmatrix.Frame(ea.get_element_name(frame_elem), arbitration_id=arbitration_id,
+                                    size=int(dlc_elem.text, 0))
         comment = ea.get_element_desc(frame_elem)
         if pdu is not None:
             new_frame.add_attribute("PduName", ea.get_short_name(pdu))
