@@ -1472,7 +1472,7 @@ class Frame(object):
                     else:
                         pdu_dlc = 1
                 if pdu is None:
-                    if return_dict['pdus'][-1]:
+                    if not return_dict['pdus'] or return_dict['pdus'][-1]:
                         return_dict['pdus'].append(None)
                 else:
                     unpacked = self.bitstring_to_signal_list(
