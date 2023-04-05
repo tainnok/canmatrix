@@ -1423,9 +1423,14 @@ class Frame(object):
             header_id_signal = self.signal_by_name("Header_ID")
             header_dlc_signal = self.signal_by_name("Header_DLC")
             container_with_header = True
-            if header_id_signal is None or header_dlc_signal is None:
+            if header_id_signal is None and header_dlc_signal is None:
                 # in this case, each subPDU of the container is located at a fixed offset which is defined at the PDU
                 container_with_header = False
+            elif header_id_signal is None or header_dlc_signal is None:
+                raise DecodingConatainerPdu(
+                    'Received message 0x{:08X} with unclear Header-Configuration (without Header_ID or '
+                    'Header_DLC signal)'.format(self.arbitration_id.id)
+                )
             if container_with_header:
                 # TODO: may be we need to check that ID/DLC signals are contiguous
                 header_size = header_id_signal.size + header_dlc_signal.size

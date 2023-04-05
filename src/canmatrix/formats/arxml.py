@@ -1501,7 +1501,7 @@ def get_frame_from_container_ipdu(pdu, target_frame, ea, float_factory, headers_
                                    port_type=pdu_port_type, cycle_time=cycle_time,
                                    offset=offset_bytes)
         pdu_sig_mapping = ea.get_children(ipdu, "I-SIGNAL-TO-I-PDU-MAPPING")
-        get_signals(pdu_sig_mapping, target_pdu, ea, None, float_factory, bit_offset=offset_bytes*8)
+        get_signals(pdu_sig_mapping, target_pdu, ea, None, float_factory)
         target_frame.add_pdu(target_pdu)
 
 
