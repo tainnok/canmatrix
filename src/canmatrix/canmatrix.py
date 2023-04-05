@@ -1079,6 +1079,19 @@ class Frame(object):
                 return pdu
         return None
 
+    def pdu_by_offset(self, pdu_offset):
+        # type: (int) -> typing.Union[Pdu, None]
+        """Get PDU.
+
+        :param int pdu_offset: PDU Offset
+        :return: PDU by offset or None if not found.
+        :rtype: Pdu
+        """
+        for pdu in self.pdus:
+            if pdu.offset == pdu_offset:
+                return pdu
+        return None
+
     def add_signal(self, signal):
         # type: (Signal) -> Signal
         """
@@ -1408,13 +1421,19 @@ class Frame(object):
         elif self.is_pdu_container:
             header_id_signal = self.signal_by_name("Header_ID")
             header_dlc_signal = self.signal_by_name("Header_DLC")
+            container_with_header = True
             if header_id_signal is None or header_dlc_signal is None:
-                raise DecodingConatainerPdu(
-                    'Received message 0x{:08X} without Header_ID or '
-                    'Header_DLC signal'.format(self.arbitration_id.id)
-                )
-            # TODO: may be we need to check that ID/DLC signals are contiguous
-            header_size = header_id_signal.size + header_dlc_signal.size
+                # in this case, each subPDU of the container is located at a fixed offset which is defined at the PDU
+                container_with_header = False
+            if container_with_header:
+                # TODO: may be we need to check that ID/DLC signals are contiguous
+                header_size = header_id_signal.size + header_dlc_signal.size
+                offset = header_id_signal.start_bit
+                header_signals = [header_id_signal, header_dlc_signal]
+            else:
+                header_size = 0
+                offset = 0
+                header_signals = []
             little, big = self.bytes_to_bitstrings(data)
             size = self.size * 8
             return_dict = dict({"pdus": []})
@@ -1425,25 +1444,31 @@ class Frame(object):
                 for s, v in zip(signals, unpacked):
                     return_dict[s.name] = DecodedSignal(v, s)
             # decode PDUs
-            offset = header_id_signal.start_bit
-            header_signals = [header_id_signal, header_dlc_signal]
             while (offset + header_size) < size:
-                unpacked = self.bitstring_to_signal_list(
-                    header_signals,
-                    big[offset:offset + header_size],
-                    little[size - offset - header_size:size - offset],
-                    header_size
-                )
-                offset += header_size
-                pdu_id = unpacked[0]
-                pdu_dlc = unpacked[1]
-                for s, v in zip(header_signals, unpacked):
-                    if s.name not in return_dict:
-                        return_dict[s.name] = []
-                    return_dict[s.name].append(DecodedSignal(v, s))
-                pdu = self.pdu_by_id(pdu_id)
+                if container_with_header:
+                    unpacked = self.bitstring_to_signal_list(
+                        header_signals,
+                        big[offset:offset + header_size],
+                        little[size - offset - header_size:size - offset],
+                        header_size
+                    )
+                    offset += header_size
+                    pdu_id = unpacked[0]
+                    pdu_dlc = unpacked[1]
+                    for s, v in zip(header_signals, unpacked):
+                        if s.name not in return_dict:
+                            return_dict[s.name] = []
+                        return_dict[s.name].append(DecodedSignal(v, s))
+                    pdu = self.pdu_by_id(pdu_id)
+                else:
+                    pdu = self.pdu_by_offset(offset//8)
+                    if pdu:
+                        pdu_dlc = pdu.size
+                    else:
+                        pdu_dlc = 1
                 if pdu is None:
-                    return_dict['pdus'].append(None)
+                    if return_dict['pdus'][-1]:
+                        return_dict['pdus'].append(None)
                 else:
                     unpacked = self.bitstring_to_signal_list(
                         pdu.signals,
