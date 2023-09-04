@@ -446,21 +446,27 @@ class Signal(object):
             raw_value = int(round(raw_value))
         return raw_value
 
-    def raw2phys(self, value, decode_to_str=False):
+    def raw2phys(self, value, decode_to_str=False, return_txt_as_scaled_numval=True):
         # type: (canmatrix.types.RawValue, bool) -> typing.Union[canmatrix.types.PhysicalValue, str]
         """Decode the given raw value (= as is on CAN).
 
         :param value: raw value compatible with `decimal`.
         :param bool decode_to_str: If True, try to get value representation as *string* ('Init' etc.)
+        :param bool return_txt_as_scaled_numval: if decode_to_str=False return the scaled value instead of the raw-val
         :return: physical value (scaled)
         """
         if self.is_float:
             value = self.float_factory(value)
-        if decode_to_str:
-            for value_key, value_string in self.values.items():
-                if value_key == value:
-                    return value_string
-                    break
+
+        for value_key, value_string in self.values.items():
+            if value_key == value:
+                # Hack for one Project
+                # if return_raw_val_for_texttable_entries == False we just return the scaled value for the texttable-entry
+                if return_txt_as_scaled_numval:
+                    text_value = value
+                else:
+                    text_value = value * self.factor + self.offset  # type: typing.Union[canmatrix.types.PhysicalValue, str]
+                return value_string if decode_to_str else text_value
 
         result = value * self.factor + self.offset  # type: typing.Union[canmatrix.types.PhysicalValue, str]
 
