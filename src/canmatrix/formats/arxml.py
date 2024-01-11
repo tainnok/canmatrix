@@ -992,8 +992,11 @@ def get_signalgrp_and_signals(sys_signal, sys_signal_array, frame, group_id, ea)
         e2e_transform = {
             'profile': ea.get_child(transform_ele, "PROFILE-NAME").text,
         }
+        data_id_mode = ea.get_child(transform_ele, "DATA-ID-MODE").text
+        if data_id_mode is not None:
+            e2e_transform['data_id_mode'] = data_id_mode
         data_id_elems = ea.get_children(ea.get_child(sys_signal, "TRANSFORMATION-I-SIGNAL-PROPSS"), "DATA-ID")
-        if data_id_elems is not None:
+        if data_id_elems is not None and len(data_id_elems) > 0:
             e2e_transform['data_ids'] = [int(x.text, 0) for x in data_id_elems]
 
     frame.add_signal_group(ea.get_element_name(sys_signal), group_id, members, e2e_transform)
