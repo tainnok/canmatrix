@@ -1402,6 +1402,79 @@ def containters_are_little_endian(ea):
     return False
 
 
+def get_flexray_frame_from_mapped_pdus_with_offset(frame_elem, target_frame, ea, float_factory):
+    pdu_mappings = ea.get_children(frame_elem, "PDU-TO-FRAME-MAPPING")
+    ipdus_refs = []
+    pdu_packing_byte_order_is_littleendian = False
+    # result looks like no header container
+    for pdu_mapping in pdu_mappings:
+        pdu_packing_byte_order = ea.get_child(pdu_mapping, 'PACKING-BYTE-ORDER')
+        if pdu_packing_byte_order is not None:
+            pdu_packing_byte_order_is_littleendian = ar_byteorder_is_little(pdu_packing_byte_order.text)
+        ipdu_selector = ea.selector(pdu_mapping, "/PDU-REF")
+        ipdu = ea.follow_ref(pdu_mapping, "PDU-REF")
+
+        if 'SECURED-I-PDU' in ipdu.tag:
+            secured_pdu_ref = ea.follow_ref(ipdu, "PAYLOAD-REF")
+            ipdu = ea.follow_ref(secured_pdu_ref, "I-PDU-REF")
+        if ipdu in ipdus_refs:
+            continue
+        ipdus_refs.append(ipdu)
+        timing_spec = ea.get_child(ipdu, "I-PDU-TIMING-SPECIFICATION")
+        if timing_spec is None:
+            timing_spec = ea.get_child(ipdu, "I-PDU-TIMING-SPECIFICATIONS")
+        cyclic_timing = ea.get_child(timing_spec, "CYCLIC-TIMING")
+        repeating_time = ea.get_child(cyclic_timing, "REPEATING-TIME")
+        cycle_time = 0
+        value = ea.get_child(repeating_time, "VALUE")
+        if value is not None:
+            cycle_time = int(float_factory(value.text) * 1000)
+        else:
+            time_period = ea.get_child(cyclic_timing, "TIME-PERIOD")
+            value = ea.get_child(time_period, "VALUE")
+            if value is not None:
+                cycle_time = int(float_factory(value.text) * 1000)
+        try:
+            offset_bytes = int(ea.get_child(pdu_mapping, "START-POSITION").text, 0) // 8
+        except:
+            offset_bytes = 0
+
+        try:
+            update_ind_bit_pos = int(ea.get_child(pdu_mapping, "UPDATE-INDICATION-BIT-POSITION").text, 0)
+        except:
+            update_ind_bit_pos = None
+
+        try:
+            pdu_type = ipdu_selector[0].attrib["DEST"]
+        except KeyError:
+            pdu_type = ""
+        try:
+            pdu_port_type = ea.get_child(ipdu, "I-PDU-PORT-REF").attrib["DEST"]
+        except (AttributeError, KeyError):
+            pdu_port_type = ""
+        ipdu_length = int(ea.get_child(ipdu, "LENGTH").text, 0)
+        ipdu_name = ea.get_element_name(ipdu)
+        ipdu_triggering_name = ea.get_element_name(ipdu)
+        target_pdu = canmatrix.Pdu(name=ipdu_name, size=ipdu_length, id=None,
+                                   triggering_name=ipdu_triggering_name, pdu_type=pdu_type,
+                                   port_type=pdu_port_type, cycle_time=cycle_time,
+                                   offset=offset_bytes,
+                                   )
+        if update_ind_bit_pos:
+            target_frame.add_signal(
+                canmatrix.Signal(
+                    start_bit=update_ind_bit_pos,
+                    size=1,
+                    name=f"UpdateIndBit_{ipdu_name}",
+                    is_little_endian=pdu_packing_byte_order_is_littleendian,
+                    is_signed=False,
+                )
+            )
+        pdu_sig_mapping = ea.get_children(ipdu, "I-SIGNAL-TO-I-PDU-MAPPING")
+        get_signals(pdu_sig_mapping, target_pdu, ea, None, float_factory)
+        target_frame.add_pdu(target_pdu)
+
+
 def _is_ipdu_cryptographic_pdu(ea, ipdu):
     if 'SECURED-I-PDU' not in ipdu.tag:
         # ipdu is not a secured-I-PDU, so it can not be a cryptographic-pdu
@@ -1828,6 +1901,8 @@ def decode_flexray_helper(ea, float_factory):
     found_matrixes = {}
     fcs = ea.findall('FLEXRAY-CLUSTER')
     frame_counter = 0
+    headers_are_littleendian = containters_are_little_endian(ea)
+    nodes = {}  # type: typing.Dict[_Element, canmatrix.Ecu]
 
     for fc in fcs:
         physical_channels = ea.findall("FLEXRAY-PHYSICAL-CHANNEL", fc)
@@ -1838,34 +1913,151 @@ def decode_flexray_helper(ea, float_factory):
             channel_name = ea.get_element_name(pc)
             found_matrixes[channel_name] = db
 
-            frames = ea.findall("FLEXRAY-FRAME-TRIGGERING", pc)
-            for frame_element in frames:
+            frame_triggerings = ea.findall("FLEXRAY-FRAME-TRIGGERING", pc)
+            for frame_triggering in frame_triggerings:
                 frame_counter += 1
-                slot_id = int(ea.get_child(frame_element, "SLOT-ID").text, 0)
-                base_cycle = ea.get_child(frame_element, "BASE-CYCLE").text
-                ipdu_triggerings = ea.get_children(frame_element, "I-PDU-TRIGGERING")
-                frame_repetition_cycle = ea.find_children_by_path(frame_element, "CYCLE-REPETITION/CYCLE-REPETITION")[
+                slot_id = int(ea.get_child(frame_triggering, "SLOT-ID").text, 0)
+                base_cycle = ea.get_child(frame_triggering, "BASE-CYCLE").text
+                ipdu_triggerings = ea.get_child(frame_triggering, "PDU-TRIGGERINGS")
+                frame_repetition_cycle = \
+                ea.find_children_by_path(frame_triggering, "CYCLE-REPETITION/CYCLE-REPETITION")[
                     0].text
-                network_endpoints = pc.findall('.//' + ea.ns + "NETWORK-ENDPOINT")
-                frame_size = int(ea.find_children_by_path(frame_element, "FRAME/FRAME-LENGTH")[0].text, 0)
-                frame = canmatrix.Frame(size=frame_size, arbitration_id=frame_counter)
-                frame.slot_id = slot_id
-                frame.base_cycle = base_cycle
-                frame.repitition_cycle = frame_repetition_cycle.replace("CYCLE-REPETITION-", "")
-                db.add_frame(frame)
-                for ipdu_triggering in ipdu_triggerings:
-                    ipdu_triggering_name = ea.get_element_name(ipdu_triggering)
-                    ipdu = ea.get_child(ipdu_triggering, "I-PDU")
-                    pdu_type = ea.get_child(ipdu_triggering, "I-PDU-REF").attrib["DEST"]
-                    ipdu_length = int(ea.get_child(ipdu, "LENGTH").text,0)
-                    pdu_port_type = ea.get_child(ipdu_triggering, "I-PDU-PORT-REF").attrib["DEST"]
-                    ipdu_name = ea.get_element_name(ipdu)
-                    target_pdu = canmatrix.Pdu(name=ipdu_name, size=ipdu_length,
-                                               triggering_name=ipdu_triggering_name, pdu_type=pdu_type,
-                                               port_type=pdu_port_type)
-                    pdu_sig_mapping = ea.get_children(ipdu, "I-SIGNAL-TO-I-PDU-MAPPING")
-                    get_signals(pdu_sig_mapping, target_pdu, ea, None, float_factory)
-                    frame.add_pdu(target_pdu)
+                frame_ref = ea.follow_ref(frame_triggering, "FRAME-REF")
+                pdu_to_frame_mappings = ea.get_children(frame_ref, "PDU-TO-FRAME-MAPPING")
+                frame_name = ea.get_child(frame_ref, "SHORT-NAME").text
+                frame_size = int(ea.get_child(frame_ref, "FRAME-LENGTH").text, 0)
+                new_frame = canmatrix.Frame(name=frame_name, size=frame_size, arbitration_id=frame_counter)
+                new_frame.slot_id = slot_id
+                new_frame.base_cycle = base_cycle
+                new_frame.repitition_cycle = frame_repetition_cycle.replace("CYCLE-REPETITION-", "")
+                comment = ea.get_element_desc(frame_ref)
+                if comment is not None:
+                    new_frame.add_comment(comment)
+
+                isignaltriggerings_of_current_cluster = ea.selector(frame_triggering, "/..//I-SIGNAL-TRIGGERING")
+
+                pdu_refs = []
+                for pdu_mapping in pdu_to_frame_mappings:
+                    pdu_refs.append(ea.follow_ref(pdu_mapping, "PDU-REF"))
+
+                if len(pdu_refs) > 1:
+                    get_flexray_frame_from_mapped_pdus_with_offset(frame_ref, new_frame, ea, float_factory)
+                else:
+                    if not pdu_refs:
+                        raise Exception("No pdu refs found")
+
+                    start_position = ea.get_child(pdu_to_frame_mappings[0], "START-POSITION")
+                    if hasattr(start_position, 'text'):
+                        start_position_bytes = int(start_position.text, 0) // 8
+                    else:
+                        start_position_bytes = 0
+
+                    has_non_zero_offset_within_frame = True if start_position_bytes > 0 else False
+                    if has_non_zero_offset_within_frame:
+                        get_flexray_frame_from_mapped_pdus_with_offset(frame_ref, new_frame, ea, float_factory)
+                    else:
+                        pdu = pdu_refs[0]
+                        if pdu is not None and 'SECURED-I-PDU' in pdu.tag:
+                            pdu = ea.selector(pdu, ">PAYLOAD-REF>I-PDU-REF")[0]
+                        if pdu is not None:
+                            new_frame.add_attribute("PduName", ea.get_short_name(pdu))
+                            new_frame.pdu_name = ea.get_element_name(pdu)
+    
+                        timing_spec = ea.get_child(pdu, "I-PDU-TIMING-SPECIFICATION")  # AR 3
+                        if timing_spec is None:
+                            timing_spec = ea.get_child(pdu, "I-PDU-TIMING-SPECIFICATIONS")  # AR 4
+    
+                        cyclic_timing = ea.get_child(timing_spec, "CYCLIC-TIMING")
+                        repeating_time = ea.get_child(cyclic_timing, "REPEATING-TIME")
+    
+                        event_timing = ea.get_child(timing_spec, "EVENT-CONTROLLED-TIMING")
+                        repeats = ea.get_child(event_timing, "NUMBER-OF-REPEATS")
+                        minimum_delay = ea.get_child(timing_spec, "MINIMUM-DELAY")
+                        starting_time = ea.get_child(timing_spec, "STARTING-TIME")
+    
+                        time_offset = ea.get_child(cyclic_timing, "TIME-OFFSET")
+                        time_period = ea.get_child(cyclic_timing, "TIME-PERIOD")
+    
+                        store_frame_timings(new_frame, cyclic_timing, event_timing, minimum_delay, repeats, starting_time,
+                                            time_offset,
+                                            repeating_time, ea, time_period, float_factory)
+    
+                        multiplex_translation = {}  # type: typing.Dict[str, str]
+                        if pdu is not None and "MULTIPLEXED-I-PDU" in pdu.tag:
+                            get_frame_from_multiplexed_ipdu(pdu, new_frame, multiplex_translation, ea, float_factory)
+                        elif pdu is not None and pdu.tag == ea.ns + "CONTAINER-I-PDU":
+                            get_frame_from_container_ipdu(pdu, new_frame, ea, float_factory, headers_are_littleendian)
+                        else:
+                            pdu_sig_mapping = ea.selector(pdu, "//I-SIGNAL-TO-I-PDU-MAPPING")
+                            if pdu_sig_mapping:
+                                get_signals(pdu_sig_mapping, new_frame, ea, None, float_factory,
+                                            signal_triggerings=isignaltriggerings_of_current_cluster)
+                            # Seen some pdu_sig_mapping being [] and not None with some arxml 4.2
+                            else:  # AR 4.2
+                                pdu_trigs = ea.follow_all_ref(frame_triggering, "PDU-TRIGGERINGS-REF")
+                                if pdu_trigs is not None:
+                                    for pdu_trig in pdu_trigs:
+                                        trig_ref_cond = ea.get_child(pdu_trig, "PDU-TRIGGERING-REF-CONDITIONAL")
+                                        trigs = ea.follow_ref(trig_ref_cond, "PDU-TRIGGERING-REF")
+                                        ipdus = ea.follow_ref(trigs, "I-PDU-REF")
+    
+                                        signal_to_pdu_maps = ea.get_child(ipdus, "I-SIGNAL-TO-PDU-MAPPINGS")
+                                        if signal_to_pdu_maps is None:
+                                            signal_to_pdu_maps = ea.get_child(ipdus, "I-SIGNAL-TO-I-PDU-MAPPINGS")
+    
+                                        if signal_to_pdu_maps is None:
+                                            logger.debug(
+                                                "AR4.x PDU %s no SIGNAL-TO-PDU-MAPPINGS found - no signal extraction!",
+                                                ea.get_element_name(ipdus))
+                                        # signal_to_pdu_map = get_children(signal_to_pdu_maps, "I-SIGNAL-TO-I-PDU-MAPPING", arDict, ns)
+                                        get_signals(signal_to_pdu_maps, new_frame, ea, None,
+                                                    float_factory,
+                                                    signal_triggerings=isignaltriggerings_of_current_cluster)  # todo BUG expects list, not item
+                                else:
+                                    logger.debug("Frame %s (assuming AR4.2) no PDU-TRIGGERINGS found", new_frame.name)
+                if new_frame.is_pdu_container and new_frame.cycle_time == 0:
+                    cycle_times = {pdu.cycle_time for pdu in new_frame.pdus}
+                    if len(cycle_times) > 1:
+                        logger.warning(
+                            "%s is pdu-container(frame) with different cycle times (%s), frame cycle-time: %s",
+                            new_frame.name, cycle_times, new_frame.cycle_time)
+                    new_frame.cycle_time = min(cycle_times)
+                new_frame.fit_dlc()
+                if frame_ref is not None:
+                    frames_cache[frame_ref] = new_frame
+
+                frame = copy.deepcopy(new_frame)
+
+                if frame is not None:
+                    comm_directions = ea.selector(frame_triggering, ">>FRAME-PORT-REF/COMMUNICATION-DIRECTION")
+                    for comm_direction in comm_directions:
+                        ecu_elem = ea.get_ecu_instance(element=comm_direction)
+                        if ecu_elem is not None:
+                            if ecu_elem in nodes:
+                                ecu = nodes[ecu_elem]
+                            else:
+                                ecu = process_ecu(ecu_elem, ea)
+                                nodes[ecu_elem] = ecu
+                            if comm_direction.text == "OUT":
+                                frame.add_transmitter(ecu.name)
+                            else:
+                                frame.add_receiver(ecu.name)
+                            db.add_ecu(ecu)
+                    db.add_frame(frame)
+
+                for frame in db.frames:
+                    if frame.is_pdu_container:
+                        continue
+                    sig_value_hash = dict()
+                    for sig in frame.signals:
+                        sig.receivers = list(set(frame.receivers).intersection(sig.receivers))
+                        try:
+                            sig_value_hash[sig.name] = sig.phys2raw()
+                        except AttributeError:
+                            sig_value_hash[sig.name] = 0
+                    frame_data = frame.encode(sig_value_hash)
+                    frame.add_attribute("GenMsgStartValue", "".join(["%02x" % x for x in frame_data]))
+
     return found_matrixes
 
 
