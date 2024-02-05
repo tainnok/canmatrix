@@ -1515,20 +1515,7 @@ def get_frame_from_container_ipdu(pdu, target_frame, ea, float_factory, headers_
         if ipdu in ipdus_refs:
             continue
         ipdus_refs.append(ipdu)
-        timing_spec = ea.get_child(ipdu, "I-PDU-TIMING-SPECIFICATION")
-        if timing_spec is None:
-            timing_spec = ea.get_child(ipdu, "I-PDU-TIMING-SPECIFICATIONS")
-        cyclic_timing = ea.get_child(timing_spec, "CYCLIC-TIMING")
-        repeating_time = ea.get_child(cyclic_timing, "REPEATING-TIME")
-        cycle_time = 0
-        value = ea.get_child(repeating_time, "VALUE")
-        if value is not None:
-            cycle_time = int(float_factory(value.text) * 1000)
-        else:
-            time_period = ea.get_child(cyclic_timing, "TIME-PERIOD")
-            value = ea.get_child(time_period, "VALUE")
-            if value is not None:
-                cycle_time = int(float_factory(value.text) * 1000)
+
         try:
             if header_type == "SHORT-HEADER":
                 header_id = ea.get_child(ipdu, "HEADER-ID-SHORT-HEADER").text
@@ -1566,6 +1553,23 @@ def get_frame_from_container_ipdu(pdu, target_frame, ea, float_factory, headers_
             pdu_port_type = ea.get_child(cpdu, "I-PDU-PORT-REF").attrib["DEST"]
         except (AttributeError, KeyError):
             pdu_port_type = ""
+
+        # read the timing specs here
+        timing_spec = ea.get_child(ipdu, "I-PDU-TIMING-SPECIFICATION")
+        if timing_spec is None:
+            timing_spec = ea.get_child(ipdu, "I-PDU-TIMING-SPECIFICATIONS")
+        cyclic_timing = ea.get_child(timing_spec, "CYCLIC-TIMING")
+        repeating_time = ea.get_child(cyclic_timing, "REPEATING-TIME")
+        cycle_time = 0
+        value = ea.get_child(repeating_time, "VALUE")
+        if value is not None:
+            cycle_time = int(float_factory(value.text) * 1000)
+        else:
+            time_period = ea.get_child(cyclic_timing, "TIME-PERIOD")
+            value = ea.get_child(time_period, "VALUE")
+            if value is not None:
+                cycle_time = int(float_factory(value.text) * 1000)
+
         ipdu_length = int(ea.get_child(ipdu, "LENGTH").text, 0)
         ipdu_name = ea.get_element_name(ipdu)
         ipdu_triggering_name = ea.get_element_name(cpdu)
